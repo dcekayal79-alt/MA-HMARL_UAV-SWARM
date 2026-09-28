@@ -41,6 +41,17 @@ class UAVHMARLEnv(ParallelEnv):
         self.r_comm = 6.0
 
         self.safe_distance = 0.5
+        # =====================================================
+        # STATIC OBSTACLES FOR LOW-LEVEL RSAC
+        # =====================================================
+        self.sensor_range = 6.0
+        self.num_obstacles = 3
+
+        self.obstacles = np.array([
+            [4.0,  4.0,  2.0],
+            [10.0, 5.0,  5.0],
+            [6.0, 12.0, 7.0]
+        ], dtype=np.float32)
 
         # =====================================================
         # CURRICULUM SETTINGS
@@ -363,6 +374,86 @@ class UAVHMARLEnv(ParallelEnv):
         )
 
         return obs.astype(np.float32)
+    # =====================================================
+    # RSAC OBSERVATION
+    # =====================================================
+    def _rsac_obs(self, agent):
+
+        # -------------------------------------------------
+        # 1. UAV position
+        # -------------------------------------------------
+        pos = self.pos[agent].copy().astype(np.float32)
+
+        # -------------------------------------------------
+        # 2. UAV velocity
+        # -------------------------------------------------
+        vel = self.vel[agent].copy().astype(np.float32)
+
+        # -------------------------------------------------
+        # 3. Assigned task = RSAC target
+        # -------------------------------------------------
+        target = self.tasks[
+            self.task_assignments[agent]
+        ].copy().astype(np.float32)
+
+        # -------------------------------------------------
+        # 4. Find nearest obstacle
+        # -------------------------------------------------
+        dists = np.linalg.norm(
+            self.obstacles - pos,
+            axis=1
+        )
+
+        idx = np.argmin(dists)
+        nearest_dist = float(dists[idx])
+
+        # -------------------------------------------------
+        # 5. Obstacle vector
+        # -------------------------------------------------
+        if nearest_dist <= self.sensor_range:
+
+            nearest_vec = (
+                self.obstacles[idx] - pos
+            ).astype(np.float32)
+
+            normalized_dist = (
+                nearest_dist / self.sensor_range
+            )
+
+        else:
+
+            nearest_vec = np.zeros(
+                3,
+                dtype=np.float32
+            )
+
+            normalized_dist = 1.0
+
+        # -------------------------------------------------
+        # 6. Construct exactly 13-D RSAC observation
+        # -------------------------------------------------
+        obs = np.concatenate([
+            pos,                         # 0:3
+            vel,                         # 3:6
+            target,                      # 6:9
+            nearest_vec,                 # 9:12
+            np.array(
+                [normalized_dist],
+                dtype=np.float32
+            )                            # 12
+        ]).astype(np.float32)
+
+        # -------------------------------------------------
+        # 7. Same normalization as RSAC training
+        # -------------------------------------------------
+        obs[0:3] /= self.world_size
+        obs[3:6] /= 1.0
+        obs[6:9] /= self.world_size
+        obs[9:12] /= self.sensor_range
+
+        obs = np.clip(obs, -1.0, 1.0)
+
+        return obs
 
     # =========================================================
     # STEP
